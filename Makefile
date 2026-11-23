@@ -7,7 +7,7 @@ else
 FILE = ht_nano-33-ble_$(VERSION).uf2
 endif
 
-.PHONY: clean build flash monitor
+.PHONY: clean build flash monitor softdevice
 
 # --- Go maintenance targets ---
 
@@ -39,10 +39,10 @@ clean:
 
 softdevice:
 	@mkdir -p softdevice
-	gopath=$$(tinygo env | grep GOPATH | sed 's/GOPATH="\(.*\)"/\1/'); \
-	bluetooth_ver=$$(cat go.mod | grep "bluetooth v"| sed "s/.* //"); \
-	ln -s $$gopath/pkg/mod/tinygo.org/x/bluetooth@$$bluetooth_ver/s140_nrf52_6.1.1 ./softdevice/; \
-	ln -s $$gopath/pkg/mod/tinygo.org/x/bluetooth@$$bluetooth_ver/s140_nrf52_7.3.0 ./softdevice/
+	bluetooth_dir=$$(go list -m -f '{{.Dir}}' tinygo.org/x/bluetooth); \
+	rm -f ./softdevice/s140_nrf52_6.1.1 ./softdevice/s140_nrf52_7.3.0; \
+	ln -s $$bluetooth_dir/s140_nrf52_6.1.1 ./softdevice/; \
+	ln -s $$bluetooth_dir/s140_nrf52_7.3.0 ./softdevice/
 
 build: softdevice
 	@mkdir -p build

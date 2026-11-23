@@ -27,3 +27,5 @@ require (
 
 // replace tinygo.org/x/drivers => ../tinygo-drivers
 // replace tinygo.org/x/bluetooth => ../tinygo-bluetooth
+
+replace tinygo.org/x/bluetooth => ../tinygo-bluetooth-v013

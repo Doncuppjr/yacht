@@ -3,6 +3,7 @@ package trainer
 // Bluetooth (FrSKY's PARA trainer protocol) link
 
 import (
+	"sync/atomic"
 	"time"
 
 	"tinygo.org/x/bluetooth"
@@ -55,8 +56,18 @@ type Para struct {
 	buffer    [20]byte
 	sendAfter time.Time
 
-	paired   bool
-	channels [8]uint16
+	paired bool
+	// NRF SoftDevice cannot evict queued notifications. When its queue is
+	// full, skip obsolete position samples and only submit fresh state later.
+	notifyQueueFull  uint32
+	notifySent       uint32 // reservations
+	notifyAccepted   uint32 // successful submissions
+	notifyCompleted  uint32
+	notifyCreditWait uint32
+	notifyLastReport time.Time
+	// Restart attempt is deferred outside the SoftDevice event handler.
+	restartAdvertisingAfter time.Time
+	channels                [8]uint16
 
 	remote ParaRemote
 }
@@ -272,15 +283,35 @@ func (t *Para) Start() string {
 	})
 	t.adv.Start()
 
+	// Completion reports how many BLE notifications have left SoftDevice.
+	// Keep callback minimal; Bluetooth APIs must not be used in event context.
+	t.adapter.SetNotificationCompleteHandler(func(count uint16) {
+		atomic.AddUint32(&t.notifyCompleted, uint32(count))
+	})
+
 	t.adapter.SetConnectHandler(func(device bluetooth.Device, connected bool) {
 		if connected {
+			atomic.StoreUint32(&t.notifySent, 0)
+			atomic.StoreUint32(&t.notifyAccepted, 0)
+			atomic.StoreUint32(&t.notifyCompleted, 0)
+			t.notifyCreditWait = 0
 			t.sendAfter = time.Now().Add(1 * time.Second) // wait for 1 second before sending data
 			setSoftDeviceSystemAttributes()               // force enable notify for fff6
-			t.fff6Handle.Write(bootBuffer)                // send '\r\n', it helps remote master switch to receiveTrainer state
+			atomic.AddUint32(&t.notifySent, 1)
+			if _, err := t.fff6Handle.Write(bootBuffer); err != nil {
+				atomic.AddUint32(&t.notifyCompleted, 1) // release reserved credit
+			} else {
+				atomic.AddUint32(&t.notifyAccepted, 1)
+			} // send '\r\n', it helps remote master switch to receiveTrainer state
 			t.paired = true
 			t.callbackHandler.OnConnect()
 		} else {
 			t.paired = false
+			// TinyGo v0.13.0 attempts an automatic SoftDevice advertising
+			// restart, but its return code is not checked. Schedule a
+			// fallback attempt in the ordinary task loop instead of
+			// calling BLE APIs from this interrupt/event callback.
+			t.restartAdvertisingAfter = time.Now().Add(1500 * time.Millisecond)
 			t.callbackHandler.OnDisconnect()
 		}
 	})
@@ -290,6 +321,18 @@ func (t *Para) Start() string {
 		for range ticker.C {
 
 			t.update()
+
+			if !t.paired && !t.restartAdvertisingAfter.IsZero() && time.Now().After(t.restartAdvertisingAfter) {
+				t.restartAdvertisingAfter = time.Time{}
+				// If the SoftDevice already restarted advertising, this may
+				// report an already-active/invalid-state result. Log it so
+				// we can distinguish that from genuine restart failures.
+				if err := t.adv.Start(); err != nil {
+					println("Bluetooth advertising fallback:", err.Error())
+				} else {
+					println("Bluetooth advertising restarted after disconnect")
+				}
+			}
 
 			if t.remote.orientationReset {
 				t.remote.orientationReset = false
@@ -334,11 +377,32 @@ func (t *Para) update() {
 	if !time.Now().After(t.sendAfter) {
 		return
 	}
-	size := t.encode()
-	n, err := t.fff6Handle.Write(t.buffer[:size])
-	if err != nil {
-		println("FFF6 write error:", err.Error(), n)
+	if time.Since(t.notifyLastReport) >= 10*time.Second {
+		t.notifyLastReport = time.Now()
+		println("FFF6 credit: full", t.notifyQueueFull, "wait", t.notifyCreditWait,
+			"accepted", atomic.LoadUint32(&t.notifyAccepted), "complete", atomic.LoadUint32(&t.notifyCompleted))
 	}
+	// A single outstanding notification bounds SoftDevice queueing latency.
+	// Any position generated while busy is obsolete by the next send tick.
+	if atomic.LoadUint32(&t.notifySent) != atomic.LoadUint32(&t.notifyCompleted) {
+		t.notifyCreditWait++
+		return
+	}
+	size := t.encode()
+	atomic.AddUint32(&t.notifySent, 1) // reserve credit before calling into SoftDevice
+	n, err := t.fff6Handle.Write(t.buffer[:size])
+	if err == nil {
+		atomic.AddUint32(&t.notifyAccepted, 1)
+		return
+	}
+	atomic.AddUint32(&t.notifyCompleted, 1) // undo reservation on failed send
+	// Nordic NRF_ERROR_RESOURCES (19) is a normal backpressure signal:
+	// too many notifications are pending. Never retry this sample.
+	if sdErr, ok := err.(bluetooth.Error); ok && sdErr == bluetooth.Error(19) {
+		t.notifyQueueFull++
+		return
+	}
+	println("FFF6 write error:", err.Error(), n)
 }
 
 func (p *Para) SetChannel(n int, v uint16) {
