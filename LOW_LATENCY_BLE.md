@@ -2,7 +2,7 @@
 
 This experimental fork builds on ysoldak/HeadTracker (Unlicense).
 It adds an advertising-restart fallback and notification credit control for
-Nordic SoftDevice so only one notification may remain outstanding. Every
+Nordic SoftDevice so at most four notifications may remain outstanding. Every
 20 ms update encodes the latest position. Updates that cannot be transmitted
 immediately are intentionally skipped, never queued behind obsolete positions.
 
@@ -55,3 +55,20 @@ packet drops, and valid TX15 trainer input. Window=5 had ~39/s but many
 queue-full responses (~9/s), and window=6 ~41/s but also queue-full responses.
 The selected experimental window is four. Longer-term field testing is still
 required. The BLE link's negotiated connection parameters should be measured.
+
+## Matched low-latency C5 profile (2026-11-23)
+
+The paired XIAO ESP32-C5 bridge now requests a 15ms BLE connection interval,
+zero peripheral latency, a 2-second supervision timeout, and 2 Mbps PHY after
+each successful connection. Its FFF6 receiver uses a one-frame latest-state
+mailbox. Those are link improvements, not changes to the over-the-air trainer
+payload or EdgeTX AT command compatibility.
+
+A 30-second bench test yielded exactly 500 accepted HeadTracker notifications
+per measured 10-second interval, C5 packet drops 0, no C5 gaps above 100ms,
+no increasing SoftDevice queue-full events, and valid EdgeTX trainer data.
+
+Both updated devices are required to reproduce this tested operating profile.
+Other FrSky-compatible BLE devices may still connect, but are not validated
+with the new performance settings. 2M PHY is a preference and must not be
+assumed to be available on older peers; 1M remains the fallback.
