@@ -63,6 +63,7 @@ type Para struct {
 	notifySent       uint32 // reservations
 	notifyAccepted   uint32 // successful submissions
 	notifyCompleted  uint32
+	notifyRadioDone  uint32 // actual SoftDevice TX-complete reports
 	notifyCreditWait uint32
 	notifyLastReport time.Time
 	// Restart attempt is deferred outside the SoftDevice event handler.
@@ -287,6 +288,7 @@ func (t *Para) Start() string {
 	// Keep callback minimal; Bluetooth APIs must not be used in event context.
 	t.adapter.SetNotificationCompleteHandler(func(count uint16) {
 		atomic.AddUint32(&t.notifyCompleted, uint32(count))
+		atomic.AddUint32(&t.notifyRadioDone, uint32(count))
 	})
 
 	t.adapter.SetConnectHandler(func(device bluetooth.Device, connected bool) {
@@ -294,6 +296,7 @@ func (t *Para) Start() string {
 			atomic.StoreUint32(&t.notifySent, 0)
 			atomic.StoreUint32(&t.notifyAccepted, 0)
 			atomic.StoreUint32(&t.notifyCompleted, 0)
+			atomic.StoreUint32(&t.notifyRadioDone, 0)
 			t.notifyCreditWait = 0
 			t.sendAfter = time.Now().Add(1 * time.Second) // wait for 1 second before sending data
 			setSoftDeviceSystemAttributes()               // force enable notify for fff6
@@ -380,11 +383,13 @@ func (t *Para) update() {
 	if time.Since(t.notifyLastReport) >= 10*time.Second {
 		t.notifyLastReport = time.Now()
 		println("FFF6 credit: full", t.notifyQueueFull, "wait", t.notifyCreditWait,
-			"accepted", atomic.LoadUint32(&t.notifyAccepted), "complete", atomic.LoadUint32(&t.notifyCompleted))
+			"accepted", atomic.LoadUint32(&t.notifyAccepted), "radioDone", atomic.LoadUint32(&t.notifyRadioDone))
 	}
-	// A single outstanding notification bounds SoftDevice queueing latency.
-	// Any position generated while busy is obsolete by the next send tick.
-	if atomic.LoadUint32(&t.notifySent) != atomic.LoadUint32(&t.notifyCompleted) {
+	// Keep a bounded number of notifications in flight. One proved too
+	// restrictive for the currently negotiated BLE connection interval.
+	// Replace updates that would exceed this small window with fresh state
+	// on a later sensor tick, rather than building an unbounded FIFO.
+	if atomic.LoadUint32(&t.notifySent)-atomic.LoadUint32(&t.notifyCompleted) >= 4 {
 		t.notifyCreditWait++
 		return
 	}

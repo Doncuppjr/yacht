@@ -45,3 +45,13 @@ local module replacement and pin the official release.
 
 HeadTracker is Unlicense. The forked TinyGo Bluetooth library retains its
 existing BSD-style license and notice requirements.
+
+## Bench result (2026-11-23)
+
+The original single-credit gate was too restrictive (~7.3 accepted notifications/s).
+Window=4 successfully maintained ~37 accepted notifications/s in a 34-second
+hardware test, with zero SoftDevice NRF_ERROR_RESOURCES responses, no C5
+packet drops, and valid TX15 trainer input. Window=5 had ~39/s but many
+queue-full responses (~9/s), and window=6 ~41/s but also queue-full responses.
+The selected experimental window is four. Longer-term field testing is still
+required. The BLE link's negotiated connection parameters should be measured.
