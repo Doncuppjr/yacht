@@ -46,6 +46,30 @@ const (
 // never sends "\r\n" and starts sending trainer data directly
 var bootBuffer = []byte{0x0d, 0x0a}
 
+// Bench-adjustable bound on queued BLE notifications; production default 4.
+var NotifyCreditLimit uint32 = 5
+
+// Bench-only switch. When true, transmit immediately on the sensor-fusion
+// loop rather than the separate 5ms BLE ticker. BLE lifecycle and
+// advertising recovery stay on the original BLE goroutine.
+var NotifyAfterFusion uint32 = 0
+
+// Mark when main loop publishes the latest fused channel values. The
+// notification goroutine reads it using the same local nRF clock.
+func (t *Para) MarkFused() {
+ atomic.StoreUint32(&t.lastFusedUs, uint32(time.Now().UnixMicro()))
+}
+
+func (t *Para) AgeStats() (samples uint32, sumUs uint64, maxUs uint32, bins [6]uint32) {
+ return t.ageSamples,t.ageSumUs,t.ageMaxUs,t.ageBins
+}
+
+// Called only from the main IMU/fusion task, not from a BLE callback.
+func (t *Para) SubmitFused() {
+ if atomic.LoadUint32(&NotifyAfterFusion) != 0 { t.update() }
+}
+
+
 type Para struct {
 	adapter    *bluetooth.Adapter
 	adv        *bluetooth.Advertisement
@@ -65,6 +89,12 @@ type Para struct {
 	notifyCompleted  uint32
 	notifyRadioDone  uint32 // actual SoftDevice TX-complete reports
 	notifyCreditWait uint32
+	notifyMaxFlight uint32
+	lastFusedUs uint32
+	ageSamples uint32
+	ageSumUs uint64
+	ageMaxUs uint32
+	ageBins [6]uint32 // <500us, <1ms, <2ms, <3ms, <5ms, >=5ms
 	notifyLastReport time.Time
 	// Restart attempt is deferred outside the SoftDevice event handler.
 	restartAdvertisingAfter time.Time
@@ -298,6 +328,7 @@ func (t *Para) Start() string {
 			atomic.StoreUint32(&t.notifyCompleted, 0)
 			atomic.StoreUint32(&t.notifyRadioDone, 0)
 			t.notifyCreditWait = 0
+			t.notifyMaxFlight = 0
 			t.sendAfter = time.Now().Add(1 * time.Second) // wait for 1 second before sending data
 			setSoftDeviceSystemAttributes()               // force enable notify for fff6
 			atomic.AddUint32(&t.notifySent, 1)
@@ -320,10 +351,9 @@ func (t *Para) Start() string {
 	})
 
 	go func() {
-		ticker := time.NewTicker(20 * time.Millisecond)
+		ticker := time.NewTicker(5 * time.Millisecond)
 		for range ticker.C {
-
-			t.update()
+			if atomic.LoadUint32(&NotifyAfterFusion) == 0 { t.update() }
 
 			if !t.paired && !t.restartAdvertisingAfter.IsZero() && time.Now().After(t.restartAdvertisingAfter) {
 				t.restartAdvertisingAfter = time.Time{}
@@ -389,12 +419,33 @@ func (t *Para) update() {
 	// restrictive for the currently negotiated BLE connection interval.
 	// Replace updates that would exceed this small window with fresh state
 	// on a later sensor tick, rather than building an unbounded FIFO.
-	if atomic.LoadUint32(&t.notifySent)-atomic.LoadUint32(&t.notifyCompleted) >= 4 {
+	if atomic.LoadUint32(&t.notifySent)-atomic.LoadUint32(&t.notifyCompleted) >= atomic.LoadUint32(&NotifyCreditLimit) {
 		t.notifyCreditWait++
 		return
 	}
+	// Timestamp at enqueue attempt, before SoftDevice submission. This
+	// measures freshness at the BLE boundary, not over-the-air delivery.
+	fusedUs := atomic.LoadUint32(&t.lastFusedUs)
+	if fusedUs != 0 {
+	 age := uint32(time.Now().UnixMicro()) - fusedUs
+	 if age < 1000000 {
+	  t.ageSamples++
+	  t.ageSumUs += uint64(age)
+	  if age > t.ageMaxUs {t.ageMaxUs=age}
+	  bin:=5
+	  switch {
+	  case age<500: bin=0
+	  case age<1000: bin=1
+	  case age<2000: bin=2
+	  case age<3000: bin=3
+	  case age<5000: bin=4
+	  }
+	  t.ageBins[bin]++
+	 }
+	}
 	size := t.encode()
-	atomic.AddUint32(&t.notifySent, 1) // reserve credit before calling into SoftDevice
+	inFlight := atomic.AddUint32(&t.notifySent, 1)-atomic.LoadUint32(&t.notifyCompleted)
+	if inFlight > t.notifyMaxFlight {t.notifyMaxFlight = inFlight}
 	n, err := t.fff6Handle.Write(t.buffer[:size])
 	if err == nil {
 		atomic.AddUint32(&t.notifyAccepted, 1)
@@ -454,4 +505,10 @@ func (t *Para) encode() byte {
 	t.buffer[bufferIndex+1] = START_STOP
 
 	return bufferIndex + 2
+}
+
+// CreditStats is read via USB diagnostics, not in the BLE callback.
+func (t *Para) CreditStats() (full, wait, accepted, done, maxFlight uint32) {
+ return t.notifyQueueFull,t.notifyCreditWait,atomic.LoadUint32(&t.notifyAccepted),
+        atomic.LoadUint32(&t.notifyRadioDone),t.notifyMaxFlight
 }

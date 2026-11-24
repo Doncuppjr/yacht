@@ -1,6 +1,8 @@
 package main
 
 import (
+	"machine"
+	"sync/atomic"
 	"math"
 	"runtime"
 	"strconv"
@@ -13,8 +15,67 @@ import (
 
 var Version string
 
+// Bench-only synthetic position step. USB 'I' creates a new tagged sample;
+ // USB 'T' reports the local timestamp for host clock-calibration.
+var injectID uint16
+var injectActive bool
+var injectLevel bool
+
+func pollLatencyUSB() {
+ for machine.Serial.Buffered() > 0 {
+  b, err := machine.Serial.ReadByte()
+  if err != nil { return }
+  if b == 'T' {
+   println("HTCLOCK", time.Now().UnixMicro())
+  } else if b == 'I' {
+   injectID++
+   if injectID > 255 { injectID = 1 }
+   injectActive = true
+   injectLevel = !injectLevel
+   // Transport diagnostic begins after the ordinary IMU+fusion calculation.
+   if t != nil {
+    t.SetChannel(7, uint16(1000+injectID))
+    if injectLevel { t.SetChannel(0, 1800) } else { t.SetChannel(0, 1200) }
+    println("HTINJECT", injectID, time.Now().UnixMicro())
+   }
+  } else if (b >= '1' && b <= '9') || b == '0' || (b >= 'a' && b <= 'f') {
+   // Bench control: '1'..'9'=1..9, '0'=10, 'a'..'f'=11..16.
+   var n uint32
+   if b == '0' {n=10} else if b >= 'a' {n=uint32(b-'a')+11} else {n=uint32(b-'0')}
+   atomic.StoreUint32(&trainer.NotifyCreditLimit, n)
+   println("HTWINDOW", n, time.Now().UnixMicro())
+  } else if b == 'D' {
+   atomic.StoreUint32(&trainer.NotifyAfterFusion, 1)
+   println("HTMODE direct", time.Now().UnixMicro())
+  } else if b == 'P' {
+   atomic.StoreUint32(&trainer.NotifyAfterFusion, 0)
+   println("HTMODE periodic", time.Now().UnixMicro())
+  } else if b == 'M' {
+   if atomic.LoadUint32(&trainer.NotifyAfterFusion) != 0 {println("HTMODE direct",time.Now().UnixMicro())} else {println("HTMODE periodic",time.Now().UnixMicro())}
+  } else if b == 'A' {
+   if para,ok:=t.(*trainer.Para);ok {
+    count,sum,max,bins:=para.AgeStats()
+    println("HTAGE count",count,"sumUs",sum,"maxUs",max,
+       "bins",bins[0],bins[1],bins[2],bins[3],bins[4],bins[5])
+   }
+  } else if b == 'Q' {
+   if para,ok:=t.(*trainer.Para);ok {
+    full,wait,accepted,done,maxFlight:=para.CreditStats()
+    println("HTCREDIT full",full,"wait",wait,"accepted",accepted,"done",done,"maxFlight",maxFlight,"limit",atomic.LoadUint32(&trainer.NotifyCreditLimit))
+   }
+  } else if b == 'W' {
+   println("HTWINDOW", atomic.LoadUint32(&trainer.NotifyCreditLimit), time.Now().UnixMicro())
+  } else if b == 'N' {
+   injectActive = false
+   if t != nil {t.SetChannel(7, 1500)}
+   println("HTNORMAL",time.Now().UnixMicro())
+  }
+ }
+}
+
+
 const (
-	PERIOD           = 20     // 20000us -- budget for main loop to ensure stable timing for sensor fusion
+	PERIOD           = 5      // 5000us -- 200Hz experimental sensor fusion benchmark
 	DISPLAY_COUNT    = 100    // update display every 100ms, with offset of one period to avoid clashing with tracing
 	FLASH_COUNT      = 30_000 // try dump state to flash every 30 seconds
 	BLINK_MAIN_COUNT = 500    // main loop indicator
@@ -45,6 +106,15 @@ type Trainer interface {
 
 var (
 	tickPeriod *time.Ticker
+	// Diagnostics: sensor-loop cadence and IMU+fusion duration. No changes to
+	// sampling, filtering, or BLE transfer behavior.
+	sensorPerfLastTick time.Time
+	sensorPerfReportAt time.Time
+	sensorPerfTicks uint32
+	sensorPerfLate uint32
+	sensorPerfMaxGapUs int64
+	sensorPerfFusionTotalUs int64
+	sensorPerfFusionMaxUs int64
 )
 
 var state struct {
@@ -188,6 +258,15 @@ func main() {
 	// main loop
 	iter = 0
 	for range tickPeriod.C {
+		perfTickNow := time.Now()
+		if !sensorPerfLastTick.IsZero() {
+			gapUs := perfTickNow.Sub(sensorPerfLastTick).Microseconds()
+			if gapUs > sensorPerfMaxGapUs { sensorPerfMaxGapUs = gapUs }
+			if gapUs > 7500 { sensorPerfLate++ }
+		}
+		sensorPerfLastTick = perfTickNow
+		sensorPerfTicks++
+		if sensorPerfReportAt.IsZero() { sensorPerfReportAt = perfTickNow }
 
 		pinDebugMain.Set(!pinDebugMain.Get())
 
@@ -199,7 +278,11 @@ func main() {
 
 		// update orientation, every 20ms (~2360us)
 		pinDebugData.High()
+		perfFusionStart := time.Now()
 		o.Update()
+		fusionUs := time.Since(perfFusionStart).Microseconds()
+		sensorPerfFusionTotalUs += fusionUs
+		if fusionUs > sensorPerfFusionMaxUs { sensorPerfFusionMaxUs = fusionUs }
 		pinDebugData.Low()
 
 		// set channels, every 20ms (~300us)
@@ -214,8 +297,14 @@ func main() {
 			if state.axisMapping[i]&0x20 == 0x20 { // axis inverted
 				chValue = 3000 - chValue
 			}
-			t.SetChannel(int(chIndex), chValue)
+			if !(injectActive && chIndex == 0) { t.SetChannel(int(chIndex), chValue) }
 		}
+		// Publish timestamp once all fused channels have been updated,
+		// before USB diagnostic command handling can add extra delay.
+		if para, ok := t.(*trainer.Para); ok {para.MarkFused()}
+		pollLatencyUSB()
+		// Submit fresh fused channels immediately, only in bench direct mode.
+		if para, ok := t.(*trainer.Para); ok {para.SubmitFused()}
 
 		// update display, every 100ms (~15000us)
 		updateDisplay(iter + PERIOD) // slow (when display is connected, shall not clash with anything else, so offset by one period)
@@ -225,6 +314,20 @@ func main() {
 		blinkPara(iter)  // very fast
 		saveState(iter)  // very slow (~85300us, can affect sensor fusion if executed too often; as it is so slow no point to offset it)
 		printState(iter) // fast (~1500us)
+		if perfTickNow.Sub(sensorPerfReportAt) >= 10*time.Second {
+			windowMs := perfTickNow.Sub(sensorPerfReportAt).Milliseconds()
+			avgUs := int64(0)
+			if sensorPerfTicks != 0 { avgUs = sensorPerfFusionTotalUs / int64(sensorPerfTicks) }
+			println("SENSORPERF ticks", sensorPerfTicks, "windowMs", windowMs,
+				"late7500us", sensorPerfLate, "maxTickGapUs", sensorPerfMaxGapUs,
+				"avgFusionUs", avgUs, "maxFusionUs", sensorPerfFusionMaxUs)
+			sensorPerfReportAt = perfTickNow
+			sensorPerfTicks = 0
+			sensorPerfLate = 0
+			sensorPerfMaxGapUs = 0
+			sensorPerfFusionTotalUs = 0
+			sensorPerfFusionMaxUs = 0
+		}
 
 		iter += PERIOD
 		iter %= 60_000

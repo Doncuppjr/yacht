@@ -1,0 +1,99 @@
+From 6c89723161eab0905538a55f38954795cc69993d Mon Sep 17 00:00:00 2001
+From: ChatGPT local build <local-build@localhost>
+Date: Mon, 23 Nov 2026 16:39:43 +0000
+Subject: [PATCH] softdevice: expose optional notification TX completion
+ callback
+
+---
+ HEADTRACKER_NOTIFICATION_CREDITS.md | 13 +++++++++++++
+ adapter_nrf528xx-full.go            |  4 +++-
+ adapter_nrf528xx-peripheral.go      |  4 +++-
+ adapter_sd.go                       |  2 ++
+ notification_complete_sd.go         | 12 ++++++++++++
+ 5 files changed, 33 insertions(+), 2 deletions(-)
+ create mode 100644 HEADTRACKER_NOTIFICATION_CREDITS.md
+ create mode 100644 notification_complete_sd.go
+
+diff --git a/HEADTRACKER_NOTIFICATION_CREDITS.md b/HEADTRACKER_NOTIFICATION_CREDITS.md
+new file mode 100644
+index 0000000..ef6594d
+--- /dev/null
++++ b/HEADTRACKER_NOTIFICATION_CREDITS.md
+@@ -0,0 +1,13 @@
++# Experimental Nordic SoftDevice notification completion callback
++
++This branch derives from TinyGo Bluetooth v0.13.0 and adds:
++
++    Adapter.SetNotificationCompleteHandler(func(count uint16))
++
++For SoftDevice S113/S132/S140 it forwards BLE_GATTS_EVT_HVN_TX_COMPLETE
++(count of completed notifications). The callback is executed by the BLE
++event dispatcher: do not block, allocate, print, or send Bluetooth data there.
++It is intentionally separate from a consumer application's flow-control policy.
++
++Experimental API; test on hardware before requesting upstream integration.
++TinyGo Bluetooth license and copyright remain unchanged.
+diff --git a/adapter_nrf528xx-full.go b/adapter_nrf528xx-full.go
+index bdeaacf..ad6b93a 100644
+--- a/adapter_nrf528xx-full.go
++++ b/adapter_nrf528xx-full.go
+@@ -161,7 +161,9 @@ func handleEvent() {
+ 			// larger MTUs, this default MTU is supported everywhere.
+ 			C.sd_ble_gatts_exchange_mtu_reply(gattsEvent.conn_handle, C.BLE_GATT_ATT_MTU_DEFAULT)
+ 		case C.BLE_GATTS_EVT_HVN_TX_COMPLETE:
+-			// ignore confirmation of a notification successfully sent
++			if cb := DefaultAdapter.notificationCompleteHandler; cb != nil {
++				cb(uint16(gattsEvent.params.unionfield_hvn_tx_complete().count))
++			}
+ 		default:
+ 			if debug {
+ 				println("unknown GATTS event:", id, id-C.BLE_GATTS_EVT_BASE)
+diff --git a/adapter_nrf528xx-peripheral.go b/adapter_nrf528xx-peripheral.go
+index 00860df..f81fb74 100644
+--- a/adapter_nrf528xx-peripheral.go
++++ b/adapter_nrf528xx-peripheral.go
+@@ -95,7 +95,9 @@ func handleEvent() {
+ 			// larger MTUs, this default MTU is supported everywhere.
+ 			C.sd_ble_gatts_exchange_mtu_reply(gattsEvent.conn_handle, C.BLE_GATT_ATT_MTU_DEFAULT)
+ 		case C.BLE_GATTS_EVT_HVN_TX_COMPLETE:
+-			// ignore confirmation of a notification successfully sent
++			if cb := DefaultAdapter.notificationCompleteHandler; cb != nil {
++				cb(uint16(gattsEvent.params.unionfield_hvn_tx_complete().count))
++			}
+ 		default:
+ 			if debug {
+ 				println("unknown GATTS event:", id, id-C.BLE_GATTS_EVT_BASE)
+diff --git a/adapter_sd.go b/adapter_sd.go
+index 4037ed9..61b4e5a 100644
+--- a/adapter_sd.go
++++ b/adapter_sd.go
+@@ -49,6 +49,8 @@ type Adapter struct {
+ 	charWriteHandlers []charWriteHandler
+ 
+ 	connectHandler func(device Device, connected bool)
++	// Called on SoftDevice notification TX completion. Must not block or allocate.
++	notificationCompleteHandler func(count uint16)
+ }
+ 
+ // DefaultAdapter is the default adapter on the current system. On Nordic chips,
+diff --git a/notification_complete_sd.go b/notification_complete_sd.go
+new file mode 100644
+index 0000000..4aad9a3
+--- /dev/null
++++ b/notification_complete_sd.go
+@@ -0,0 +1,12 @@
++//go:build softdevice && (s113v7 || s132v6 || s140v6 || s140v7)
++
++package bluetooth
++
++// SetNotificationCompleteHandler registers a callback for Nordic SoftDevice
++// Handle Value Notification transmission completions. count is the number of
++// notification credits freed, not the number of application messages received.
++// The callback runs in the BLE event context: it must be short, nonblocking,
++// and must not perform Bluetooth operations or allocate.
++func (a *Adapter) SetNotificationCompleteHandler(cb func(count uint16)) {
++	a.notificationCompleteHandler = cb
++}
+-- 
+2.56.1
+

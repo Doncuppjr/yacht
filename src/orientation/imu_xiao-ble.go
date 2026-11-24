@@ -33,7 +33,7 @@ func NewIMU() *IMU {
 func (imu *IMU) Configure() error {
 	// Configure I2C
 	err := machine.I2C1.Configure(machine.I2CConfig{
-		Frequency: 100 * machine.KHz,
+		Frequency: 400 * machine.KHz,
 		SDA:       machine.SDA1_PIN,
 		SCL:       machine.SCL1_PIN,
 	})
