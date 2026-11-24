@@ -4,3 +4,7 @@ attic
 build
 softdevice
 releases
+
+# Arduino build artifacts
+ANCHOR/build/
+ANCHOR/dist/
