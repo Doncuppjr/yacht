@@ -8,3 +8,6 @@ releases
 # Arduino build artifacts
 ANCHOR/build/
 ANCHOR/dist/
+
+# Browser installer output
+ANCHOR/site/
