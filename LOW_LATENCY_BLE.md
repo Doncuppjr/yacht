@@ -2,7 +2,7 @@
 
 This experimental fork builds on ysoldak/HeadTracker (Unlicense).
 It adds an advertising-restart fallback and notification credit control for
-Nordic SoftDevice so at most four notifications may remain outstanding. Every
+Nordic SoftDevice so at most five notifications may remain outstanding. Every
 20 ms update encodes the latest position. Updates that cannot be transmitted
 immediately are intentionally skipped, never queued behind obsolete positions.
 
@@ -53,8 +53,11 @@ Window=4 successfully maintained ~37 accepted notifications/s in a 34-second
 hardware test, with zero SoftDevice NRF_ERROR_RESOURCES responses, no C5
 packet drops, and valid TX15 trainer input. Window=5 had ~39/s but many
 queue-full responses (~9/s), and window=6 ~41/s but also queue-full responses.
-The selected experimental window is four. Longer-term field testing is still
-required. The BLE link's negotiated connection parameters should be measured.
+Window=4 was the initial conservative bench choice. Subsequent hardware
+validation selected **five** as the production credit limit; the firmware
+default is `NotifyCreditLimit = 5`. The 34-second figures above describe the
+earlier comparison rather than the final optimization. Longer-term field
+testing remains useful. The BLE link's negotiated parameters should be measured.
 
 ## Matched low-latency C5 profile (2026-11-23)
 

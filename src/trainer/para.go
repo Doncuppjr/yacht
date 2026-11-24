@@ -46,7 +46,7 @@ const (
 // never sends "\r\n" and starts sending trainer data directly
 var bootBuffer = []byte{0x0d, 0x0a}
 
-// Bench-adjustable bound on queued BLE notifications; production default 4.
+// Bounded outstanding BLE notifications; hardware-validated production default 5.
 var NotifyCreditLimit uint32 = 5
 
 // Bench-only switch. When true, transmit immediately on the sensor-fusion
