@@ -11,3 +11,4 @@ ANCHOR/dist/
 
 # Browser installer output
 ANCHOR/site/
+.deps/

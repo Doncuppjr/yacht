@@ -1,8 +1,11 @@
 name: Build binary
 
 on:
+  push:
+    branches: [ main ]
   pull_request:
-    branches: [ master ]
+    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -12,10 +15,8 @@ jobs:
       matrix:
         tinygo-version: 
         - 'tinygo:0.40.1'
-        - 'tinygo-dev:latest'
         target:
         - xiao-ble
-        - nano-33-ble-s140v6-uf2
     container:
       image: ghcr.io/tinygo-org/${{ matrix.tinygo-version }}
       options: --user root
@@ -24,7 +25,7 @@ jobs:
     - name: Prepare
       run: |
         apt-get update
-        apt-get install -y make
+        apt-get install -y make patch python3
 
     - name: Work around CVE-2022-24765
       # We're not on a multi-user machine, so this is safe.
@@ -35,9 +36,12 @@ jobs:
       with:
         fetch-depth: 0
 
+    - name: Patch pinned TinyGo Bluetooth dependency
+      run: ./scripts/prepare-bluetooth.sh
+
     - name: Dependencies
       run: |
-        go mod tidy
+        go mod download
 
     - name: Clean
       run: make clean

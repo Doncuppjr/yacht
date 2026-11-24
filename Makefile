@@ -28,7 +28,7 @@ llvm:
 
 # --- Common targets ---
 
-VERSION ?= $(shell git describe --tags)
+VERSION ?= $(shell git describe --tags --always --dirty)
 LD_FLAGS := -ldflags="-X 'main.Version=$(VERSION)'" # https://www.digitalocean.com/community/tutorials/using-ldflags-to-set-version-information-for-go-applications
 
 EXTRA_TAGS = nogopls # to include all source files, even those excluded for gopls

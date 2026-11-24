@@ -1,3 +1,13 @@
+# Yacht — nRF52840 head tracker
+
+Firmware for the XIAO BLE Sense / nRF52840 wireless trainer transmitter.
+
+Derived from [ysoldak/HeadTracker](https://github.com/ysoldak/HeadTracker); this repository tracks the Yacht-specific trainer, sensor, and BLE work separately from [Anchor](https://github.com/Doncuppjr/anchor), the ESP32-C5 radio-side bridge.
+
+Build: `make TARGET=xiao-ble build`. The existing HeadTracker setup, board reference, and calibration notes follow.
+
+---
+
 # Zero configuration auto-calibrating DIY head tracker
 
 Head Tracker runs on [Seeeduino XIAO BLE Sense](https://www.seeedstudio.com/Seeed-XIAO-BLE-Sense-nRF52840-p-5253.html) and [Arduino Nano 33 BLE](https://store.arduino.cc/arduino-nano-33-ble) boards and connects to [OpenTX](https://github.com/opentx/opentx), [EdgeTX](https://edgetx.org) and [ETHOS](https://ethos.frsky-rc.com) radios via either wired (PPM) or wireless (Bluetooth) trainer link.
@@ -196,3 +206,5 @@ Bluetooth mode is active by default.
   Another version of head tracker, based on Arduino Nano 33 BLE board.
 - [Bluetooth Smart/BLE Crash Course](https://inductive-kickback.com/projects/bluetooth-low-energy/bluetooth-smartble-crash-course/)
 - [Bluetooth low energy Characteristics, a beginner's tutorial](https://devzone.nordicsemi.com/nordic/short-range-guides/b/bluetooth-low-energy/posts/ble-characteristics-a-beginners-tutorial)
+
+For reproducible local builds, run `./scripts/prepare-bluetooth.sh` once before `make TARGET=xiao-ble build`. CI applies the same patch automatically.

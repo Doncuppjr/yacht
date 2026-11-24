@@ -1,4 +1,4 @@
-module github.com/ysoldak/HeadTracker
+module github.com/Doncuppjr/yacht
 
 go 1.25
 
@@ -27,5 +27,3 @@ require (
 
 // replace tinygo.org/x/drivers => ../tinygo-drivers
 // replace tinygo.org/x/bluetooth => ../tinygo-bluetooth
-
-replace tinygo.org/x/bluetooth => ../tinygo-bluetooth-v013

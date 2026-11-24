@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/ysoldak/HeadTracker/src/display"
-	"github.com/ysoldak/HeadTracker/src/orientation"
-	"github.com/ysoldak/HeadTracker/src/trainer"
+	"github.com/Doncuppjr/yacht/src/display"
+	"github.com/Doncuppjr/yacht/src/orientation"
+	"github.com/Doncuppjr/yacht/src/trainer"
 )
 
 var Version string
