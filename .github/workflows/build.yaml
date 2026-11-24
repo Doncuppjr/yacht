@@ -40,8 +40,14 @@ jobs:
       run: ./scripts/prepare-bluetooth.sh
 
     - name: Dependencies
+      shell: bash
       run: |
-        go mod download
+        for attempt in 1 2 3 4; do
+          go mod download && break
+          if [ "$attempt" -eq 4 ]; then exit 1; fi
+          echo "Go module download failed; retry $attempt/3"
+          sleep 8
+        done
 
     - name: Clean
       run: make clean
